@@ -96,14 +96,14 @@ func (l *ComputeInstanceLister) List(ctx context.Context, o interface{}) ([]reso
 }
 
 type ComputeInstance struct {
-	svc          *compute.InstancesClient
-	settings     *settings.Setting
-	protectionOp *compute.Operation
-	removeOp     *compute.Operation
-	Project      *string
-	Region       *string
-	Name         *string
-	Zone         *string
+	svc               *compute.InstancesClient
+	settings          *settings.Setting
+	protectionOp      *compute.Operation
+	removeOp          *compute.Operation
+	Project           *string
+	Region            *string
+	Name              *string
+	Zone              *string
 	CreationTimestamp *string
 	Labels            map[string]string `property:"tagPrefix=label"`
 }
@@ -114,6 +114,8 @@ func (r *ComputeInstance) Settings(setting *settings.Setting) {
 
 func (r *ComputeInstance) Remove(ctx context.Context) error {
 	if r.settings != nil && r.settings.GetBool("DisableDeletionProtection") {
+		logrus.Trace("disabling deletion protection")
+
 		var err error
 		r.protectionOp, err = r.svc.SetDeletionProtection(ctx, &computepb.SetDeletionProtectionInstanceRequest{
 			Project:            *r.Project,
@@ -185,4 +187,3 @@ func (r *ComputeInstance) Properties() types.Properties {
 func (r *ComputeInstance) String() string {
 	return *r.Name
 }
-
