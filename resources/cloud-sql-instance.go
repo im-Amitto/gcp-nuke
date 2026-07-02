@@ -7,6 +7,7 @@ import (
 	"github.com/ekristen/libnuke/pkg/settings"
 	"github.com/gotidy/ptr"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/api/option"
 	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 
 	"github.com/ekristen/libnuke/pkg/registry"
@@ -44,7 +45,11 @@ func (l *CloudSQLInstanceLister) List(ctx context.Context, o interface{}) ([]res
 
 	if l.svc == nil {
 		var err error
-		l.svc, err = sqladmin.NewService(ctx, opts.ClientOptions...)
+		// The Cloud SQL Admin API's SERVICE_DISABLED check is evaluated against the quota
+		// project header, which otherwise defaults to whatever's baked into local ADC and can
+		// silently differ from the project being nuked. Force it to match explicitly.
+		svcOpts := append(append([]option.ClientOption{}, opts.ClientOptions...), option.WithQuotaProject(*opts.Project))
+		l.svc, err = sqladmin.NewService(ctx, svcOpts...)
 		if err != nil {
 			return nil, err
 		}
