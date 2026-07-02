@@ -14,6 +14,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
+	asset "cloud.google.com/go/asset/apiv1"
+	"cloud.google.com/go/asset/apiv1/assetpb"
 	"cloud.google.com/go/compute/apiv1"
 	"cloud.google.com/go/compute/apiv1/computepb"
 	"cloud.google.com/go/iam/credentials/apiv1"
@@ -121,6 +123,153 @@ func (g *GCP) GetEnabledAPIs() []string {
 
 func (g *GCP) GetCredentials(ctx context.Context) (*google.Credentials, error) {
 	return google.FindDefaultCredentials(ctx)
+}
+
+// DiscoverActiveRegions queries Cloud Asset Inventory for every resource in the project and returns
+// the distinct set of regions (plus "global") that actually contain at least one resource. This lets
+// callers skip scanning regions that are provably empty, without an extra list call per resource type
+// per region. Requires cloudasset.googleapis.com to be enabled and the cloudasset.assets.searchAllResources
+// permission (already covered by broader roles like Owner/Editor) on the project; if the API is disabled,
+// this will attempt to enable it and retry.
+func (g *GCP) DiscoverActiveRegions(ctx context.Context) ([]string, error) {
+	// The Cloud Asset API's SERVICE_DISABLED check is evaluated against the quota project header,
+	// which otherwise defaults to whatever's baked into local ADC and can silently differ from the
+	// project being nuked. Force it to match explicitly.
+	clientOpts := append(append([]option.ClientOption{}, g.GetClientOptions()...), option.WithQuotaProject(g.ProjectID))
+
+	client, err := asset.NewClient(ctx, clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+
+	req := &assetpb.SearchAllResourcesRequest{
+		Scope: fmt.Sprintf("projects/%s", g.ProjectID),
+	}
+
+	regions, err := g.searchActiveRegions(ctx, client, req)
+	if err == nil {
+		return regions, nil
+	}
+
+	const cloudAssetAPI = "cloudasset.googleapis.com"
+	if !isServiceDisabled(err, cloudAssetAPI) {
+		return nil, err
+	}
+
+	logrus.WithError(err).Info("Cloud Asset API is disabled, attempting to enable it")
+
+	if enableErr := g.enableAPI(ctx, cloudAssetAPI); enableErr != nil {
+		return nil, fmt.Errorf("cloud asset api is disabled and could not be enabled automatically: %w", enableErr)
+	}
+
+	// Enablement can take a short time to propagate even after the operation reports done.
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		regions, err = g.searchActiveRegions(ctx, client, req)
+		if err == nil {
+			return regions, nil
+		}
+		if !isServiceDisabled(err, cloudAssetAPI) || time.Now().After(deadline) {
+			return nil, err
+		}
+		logrus.Debug("Cloud Asset API not propagated yet, retrying")
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func (g *GCP) searchActiveRegions(
+	ctx context.Context, client *asset.Client, req *assetpb.SearchAllResourcesRequest,
+) ([]string, error) {
+	// Cloud Asset Inventory locations aren't limited to clean regions/zones: multi-region
+	// aliases (e.g. "us", "eu" for GCS/BigQuery/Artifact Registry) and other non-region location
+	// strings show up too, and neither is a valid `region` parameter for Compute-style listers.
+	// Only trust locations that match a region Compute Engine actually reports as enabled.
+	validRegions := make(map[string]bool, len(g.Regions))
+	for _, r := range g.Regions {
+		validRegions[r] = true
+	}
+
+	seen := map[string]bool{"global": true}
+	regions := []string{"global"}
+
+	it := client.SearchAllResources(ctx, req)
+	for {
+		resp, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		region := regionFromLocation(resp.GetLocation())
+		if region == "" || seen[region] || !validRegions[region] {
+			continue
+		}
+		seen[region] = true
+		regions = append(regions, region)
+	}
+
+	return regions, nil
+}
+
+// isServiceDisabled reports whether err is a SERVICE_DISABLED error for the given API.
+func isServiceDisabled(err error, service string) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SERVICE_DISABLED") && strings.Contains(msg, service)
+}
+
+// enableAPI enables the given service on the project and waits for the enablement operation to complete.
+func (g *GCP) enableAPI(ctx context.Context, service string) error {
+	svc, err := serviceusage.NewService(ctx, g.GetClientOptions()...)
+	if err != nil {
+		return err
+	}
+
+	name := fmt.Sprintf("projects/%s/services/%s", g.ProjectID, service)
+	op, err := svc.Services.Enable(name, &serviceusage.EnableServiceRequest{}).Context(ctx).Do()
+	if err != nil {
+		return err
+	}
+
+	for !op.Done {
+		time.Sleep(2 * time.Second)
+		op, err = svc.Operations.Get(op.Name).Context(ctx).Do()
+		if err != nil {
+			return err
+		}
+	}
+
+	if op.Error != nil {
+		return fmt.Errorf("enabling %s: %s", service, op.Error.Message)
+	}
+
+	return nil
+}
+
+// regionFromLocation normalizes a Cloud Asset Inventory location, which may be zonal
+// (e.g. "us-central1-a"), down to its region (e.g. "us-central1").
+func regionFromLocation(location string) string {
+	if location == "" || location == "global" {
+		return location
+	}
+
+	parts := strings.Split(location, "-")
+	if len(parts) < 3 {
+		// Already region-level (e.g. "us-central1") or a multi-region (e.g. "us").
+		return location
+	}
+
+	// Zonal locations have a trailing single-letter zone suffix, e.g. "us-central1-a".
+	if last := parts[len(parts)-1]; len(last) == 1 {
+		return strings.Join(parts[:len(parts)-1], "-")
+	}
+
+	return location
 }
 
 func New(ctx context.Context, projectID, impersonateServiceAccount string) (*GCP, error) {

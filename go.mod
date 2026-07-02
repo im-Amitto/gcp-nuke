@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/aiplatform v1.125.0
 	cloud.google.com/go/alloydb v1.26.0
 	cloud.google.com/go/artifactregistry v1.25.0
+	cloud.google.com/go/asset v1.27.0
 	cloud.google.com/go/bigquery v1.77.0
 	cloud.google.com/go/bigtable v1.48.0
 	cloud.google.com/go/certificatemanager v1.14.0
@@ -50,11 +51,14 @@ require (
 require (
 	cel.dev/expr v0.25.1 // indirect
 	cloud.google.com/go v0.123.0 // indirect
+	cloud.google.com/go/accesscontextmanager v1.10.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/longrunning v1.0.0 // indirect
 	cloud.google.com/go/monitoring v1.29.0 // indirect
+	cloud.google.com/go/orgpolicy v1.16.0 // indirect
+	cloud.google.com/go/osconfig v1.17.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.31.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.56.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.56.0 // indirect
@@ -108,3 +112,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260511170946-3700d4141b60 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/ekristen/libnuke => github.com/im-Amitto/libnuke v1.3.1-0.20260702043642-e0fea958ad49
