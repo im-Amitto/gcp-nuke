@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/gotidy/ptr"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 
 	compute "cloud.google.com/go/compute/apiv1"
@@ -33,6 +35,11 @@ func init() {
 		Lister:   &ComputeInstanceLister{},
 		Settings: []string{
 			"DisableDeletionProtection",
+		},
+		DependsOn: []string{
+			// Instances belonging to a managed instance group get recreated by the
+			// group as soon as they're deleted, so the group has to go first.
+			ComputeInstanceGroupManagerResource,
 		},
 	})
 }
@@ -138,6 +145,13 @@ func (r *ComputeInstance) delete(ctx context.Context) (err error) {
 		Zone:     *r.Zone,
 		Instance: *r.Name,
 	})
+
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+		// The instance group manager that owned this instance has already deleted it.
+		return nil
+	}
+
 	return err
 }
 

@@ -50,6 +50,7 @@ func execute(ctx context.Context, cmd *cli.Command) error {
 		Includes:           cmd.StringSlice("include"),
 		Excludes:           cmd.StringSlice("exclude"),
 		WaitOnDependencies: cmd.Bool("wait-on-dependencies"),
+		MaxWaitRetries:     int(cmd.Int("max-wait-retries")),
 	}
 
 	parsedConfig, err := libconfig.New(libconfig.Options{
@@ -107,10 +108,44 @@ func execute(ctx context.Context, cmd *cli.Command) error {
 	}()
 
 	if slices.Contains(parsedConfig.Regions, "all") {
-		parsedConfig.Regions = gcp.Regions
+		activeRegions, err := gcp.DiscoverActiveRegions(ctx)
+		switch {
+		case err != nil:
+			logger.WithError(err).Warn(
+				"unable to discover active regions via Cloud Asset Inventory, falling back to scanning every enabled region")
+			parsedConfig.Regions = gcp.Regions
+		case len(activeRegions) <= 1:
+			// Only "global" came back. Cloud Asset Inventory locations for multi-region resources
+			// (e.g. GCS/BigQuery "US"/"EU") never match a real region, so a project with resources
+			// only in multi-region locations would otherwise end up with zero regional scanners,
+			// even though some listers (e.g. StorageBucket) know how to find multi-region resources
+			// once at least one regional scanner runs, regardless of which region that is. So a
+			// single region is enough to unblock them - no need to fall back to scanning everything.
+			fallbackRegion := ""
+			for _, r := range gcp.Regions {
+				if r != "global" {
+					fallbackRegion = r
+					break
+				}
+			}
 
-		logger.Info(
-			`"all" detected in region list, only enabled regions and "global" will be used, all others ignored`)
+			if fallbackRegion == "" {
+				logger.Info(
+					`"all" detected in region list, but no region-specific resources were found and no ` +
+						`enabled region is available to fall back to; scanning "global" only`)
+				parsedConfig.Regions = []string{"global"}
+			} else {
+				logger.Infof(
+					`"all" detected in region list, but no region-specific resources were found; `+
+						`scanning "global" and %q as well in case of multi-region resources`, fallbackRegion)
+				parsedConfig.Regions = []string{"global", fallbackRegion}
+			}
+		default:
+			logger.Infof(
+				`"all" detected in region list, limiting scan to the %d region(s) that actually contain resources`,
+				len(activeRegions))
+			parsedConfig.Regions = activeRegions
+		}
 
 		if len(parsedConfig.Regions) > 1 {
 			logger.Warnf(`additional regions defined along with "all", these will be ignored!`)
@@ -194,6 +229,12 @@ func init() {
 		&cli.BoolFlag{
 			Name:  "wait-on-dependencies",
 			Usage: "wait for dependent resources to be deleted before deleting resources that depend on them",
+		},
+		&cli.IntFlag{
+			Name: "max-wait-retries",
+			Usage: "give up and fail the run after this many wait-loop retries for a stuck resource " +
+				"(at a 5 second poll interval); 0 waits forever",
+			Value: 240,
 		},
 		&cli.StringSliceFlag{
 			Name:    "feature-flag",

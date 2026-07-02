@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	compute "cloud.google.com/go/compute/apiv1"
@@ -15,6 +16,7 @@ import (
 	"github.com/ekristen/libnuke/pkg/resource"
 	"github.com/ekristen/libnuke/pkg/types"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 )
 
@@ -108,6 +110,11 @@ func (r *VPCNetwork) Remove(ctx context.Context) error {
 		Network: *r.Name,
 	})
 	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			// Already deleted, e.g. by a prior pass whose failure we retried.
+			return nil
+		}
 		if isRetryableError(err) {
 			return liberror.ErrWaitResource("resource not ready, retrying")
 		}
