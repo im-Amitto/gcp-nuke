@@ -13,6 +13,12 @@
 - **`Project`**: No description provided
 - **`Region`**: No description provided
 - **`Zone`**: No description provided
+## Depends On
+
+!!! Experimental Feature
+    This is an **experimental** feature, please read more about it here <>. This feature attempts to remove all resources in one resource type before moving onto the dependent resource type
+
+- [Compute Instance Group Manager](compute-instance-group-manager.md)
 ## Settings
 
 - `DisableDeletionProtection`

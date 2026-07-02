@@ -3,12 +3,14 @@ package resources
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/gotidy/ptr"
 
 	"github.com/sirupsen/logrus"
 
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 
 	compute "cloud.google.com/go/compute/apiv1"
@@ -29,6 +31,11 @@ func init() {
 		Scope:    nuke.Project,
 		Resource: &ComputeDisk{},
 		Lister:   &ComputeDiskLister{},
+		DependsOn: []string{
+			// Disks attached to a running instance can't be deleted until the
+			// instance is gone.
+			ComputeInstanceResource,
+		},
 	})
 }
 
@@ -114,6 +121,13 @@ func (r *ComputeDisk) Remove(ctx context.Context) error {
 		Zone:    *r.Zone,
 		Disk:    *r.Name,
 	})
+
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+		// The instance this disk was attached to already deleted it (e.g. autoDelete).
+		return nil
+	}
+
 	return err
 }
 

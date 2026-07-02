@@ -3,10 +3,12 @@ package resources
 import (
 	"context"
 	"errors"
+	"net/http"
 
 	"github.com/gotidy/ptr"
 	"github.com/sirupsen/logrus"
 
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 
 	compute "cloud.google.com/go/compute/apiv1"
@@ -27,6 +29,9 @@ func init() {
 		Scope:    nuke.Project,
 		Resource: &ComputeInstanceGroup{},
 		Lister:   &ComputeInstanceGroupLister{},
+		DependsOn: []string{
+			ComputeInstanceGroupManagerResource,
+		},
 	})
 }
 
@@ -101,6 +106,13 @@ func (r *ComputeInstanceGroup) Remove(ctx context.Context) error {
 		Zone:          *r.Zone,
 		InstanceGroup: *r.Name,
 	})
+
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+		// The instance group manager that owned this group has already deleted it.
+		return nil
+	}
+
 	return err
 }
 
