@@ -110,6 +110,7 @@ func (l *GKEClusterLister) List(ctx context.Context, o interface{}) ([]resource.
 type GKECluster struct {
 	svc               *container.ClusterManagerClient
 	removeOp          *containerpb.Operation
+	removeOpName      string
 	Project           *string
 	Region            *string
 	Name              *string
@@ -133,6 +134,10 @@ func (r *GKECluster) Remove(ctx context.Context) error {
 		logrus.WithError(err).WithField("cluster", *r.Name).Trace("gke cluster delete error")
 		return liberror.ErrWaitResource(fmt.Sprintf("delete failed: %v", err))
 	}
+
+	// GetOperation requires the fully qualified name; the operation returned by
+	// DeleteCluster only carries the bare operation ID.
+	r.removeOpName = fmt.Sprintf("projects/%s/locations/%s/operations/%s", *r.Project, *location, r.removeOp.Name)
 	return nil
 }
 
@@ -149,25 +154,29 @@ func (r *GKECluster) HandleWait(ctx context.Context) error {
 		return nil
 	}
 
-	var err error
-	r.removeOp, err = r.svc.GetOperation(ctx, &containerpb.GetOperationRequest{
-		Name: r.removeOp.Name,
+	op, err := r.svc.GetOperation(ctx, &containerpb.GetOperationRequest{
+		Name: r.removeOpName,
 	})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			logrus.WithField("cluster", *r.Name).Trace("operation not found, assuming completed")
+			r.removeOp = nil
 			return nil
 		}
 		logrus.WithError(err).WithField("cluster", *r.Name).Trace("failed to get operation status")
 		return liberror.ErrWaitResource(fmt.Sprintf("poll failed: %v", err))
 	}
+	r.removeOp = op
 
-	if r.removeOp.Status != containerpb.Operation_DONE {
+	if op.Status != containerpb.Operation_DONE {
 		return liberror.ErrWaitResource("waiting for operation to complete")
 	}
 
-	if r.removeOp.GetError() != nil {
-		return fmt.Errorf("operation failed: %v", r.removeOp.GetError())
+	if op.GetError() != nil {
+		// Fail the item so libnuke re-triggers Remove with a fresh delete
+		// instead of waiting on a finished operation forever.
+		r.removeOp = nil
+		return fmt.Errorf("operation failed: %v", op.GetError().GetMessage())
 	}
 
 	return nil
